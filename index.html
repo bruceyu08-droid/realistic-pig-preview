@@ -158,6 +158,34 @@
       #mode-water.is-on { background: #2c6d84; }
       #mode-foam.is-on { background: #7d756c; }
       #look-under.is-on { background: #5c5348; color: #f7f4ef; border-color: transparent; }
+      .gears {
+        pointer-events: auto;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .gears span {
+        flex: 0 0 auto;
+        font-size: 12px;
+        color: #3a3632;
+      }
+      .gears button {
+        flex: 1;
+        border: 1px solid rgba(40, 34, 28, 0.1);
+        background: rgba(255, 252, 248, 0.84);
+        color: #3a3632;
+        font: inherit;
+        font-size: 14px;
+        letter-spacing: 0.08em;
+        padding: 7px 0;
+        border-radius: 10px;
+        cursor: pointer;
+      }
+      .gears button.is-on {
+        background: #2c6d84;
+        color: #f7f4ef;
+        border-color: transparent;
+      }
       #hint {
         margin: 0;
         padding: 8px 12px;
@@ -235,6 +263,13 @@
           </div>
         </div>
         <div class="bottom">
+          <div class="gears" id="gear-row">
+            <span>水速</span>
+            <button type="button" data-gear="0">弱</button>
+            <button type="button" data-gear="1" class="is-on">中</button>
+            <button type="button" data-gear="2">强</button>
+            <button type="button" data-gear="3">劲</button>
+          </div>
           <div class="modes">
             <button id="mode-water" type="button" class="is-on">清水</button>
             <button id="mode-foam" type="button">泡沫</button>

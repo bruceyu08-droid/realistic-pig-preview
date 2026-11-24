@@ -58,7 +58,7 @@ const lifeUniforms = {
   uHitPos: { value: new THREE.Vector3() },
   uHitDir: { value: new THREE.Vector3(0, -1, 0) },
   uHitAmp: { value: 0 },
-  uHitSig: { value: 0.058 },
+  uHitSig: { value: 0.095 },
   uLidColor: { value: new THREE.Color().setRGB(196 / 255, 148 / 255, 138 / 255, THREE.SRGBColorSpace) },
   uWashMin: { value: WASH_MIN },
   uWashSize: { value: WASH_SIZE },
@@ -289,9 +289,13 @@ const VERTEX_MOVE = /* glsl */ `
   transformed += w * (down * uJiggle + uNudge);
 
   vec3 hitRel = rest - uHitPos;
-  float hitFall = exp(-dot(hitRel, hitRel) / max(2.0 * uHitSig * uHitSig, 1e-5));
-  float give = mix(0.78, 1.12, w);
-  transformed += uHitDir * (uHitAmp * hitFall * give);
+  float sig = max(uHitSig, 1e-4);
+  float d2 = dot(hitRel, hitRel);
+  float center = exp(-d2 / (2.0 * sig * sig));
+  float shoulder = exp(-d2 / (2.0 * sig * sig * 2.35));
+  float dent = center - 0.32 * max(shoulder - center, 0.0);
+  float give = mix(1.05, 1.45, w);
+  transformed += uHitDir * (uHitAmp * dent * give);
 
   float b = breathMask(rest) * uBreath;
   vec3 side = vec3(0.912925, 0.0, -0.408127);
@@ -355,6 +359,9 @@ uniform float uBlink;
 uniform vec3 uEyeL;
 uniform vec3 uEyeR;
 uniform vec3 uLidColor;
+uniform vec3 uHitPos;
+uniform float uHitAmp;
+uniform float uHitSig;
 
 float hash31(vec3 p) {
   return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453);
@@ -425,16 +432,32 @@ function applyPigMaterial(material) {
         float fold = smoothstep(0.2, -0.65, vObjN.y);
         float blotch = vnoise(vPigLocal * 1.8);
         float blotchB = vnoise(vPigLocal * 4.6 + 3.7);
-        vec3 mudLight = vec3(0.34, 0.18, 0.08);
-        vec3 mudMid = vec3(0.22, 0.11, 0.045);
-        vec3 mudDark = vec3(0.07, 0.03, 0.015);
-        float bands = smoothstep(0.28, 0.55, blotch) * 0.65 + smoothstep(0.42, 0.7, blotchB) * 0.55;
+        vec3 mudLight = vec3(0.11, 0.05, 0.02);
+        vec3 mudMid = vec3(0.055, 0.024, 0.01);
+        vec3 mudDark = vec3(0.02, 0.008, 0.004);
+        float bands = smoothstep(0.22, 0.58, blotch) * 0.7 + smoothstep(0.35, 0.72, blotchB) * 0.55;
         vec3 mud = mix(mudLight, mudMid, clamp(bands, 0.0, 1.0));
-        mud = mix(mud, mudDark, clamp(smoothstep(0.62, 0.82, blotchB) + fold * 0.45, 0.0, 1.0));
-        mud *= 0.9 + 0.16 * n2;
-        diffuseColor.rgb = mix(diffuseColor.rgb, mud, mudMask * 0.97);
-        float clumps = smoothstep(0.28, 0.62, foam * (0.55 + 0.9 * n1));
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.97, 0.98, 0.96), clumps * 0.96);
+        mud = mix(mud, mudDark, clamp(smoothstep(0.55, 0.82, blotchB) * 0.85 + fold * 0.6, 0.0, 1.0));
+        mud *= 0.88 + 0.2 * n2;
+        diffuseColor.rgb = mix(diffuseColor.rgb, mud, mudMask);
+        float fUp = texture(uWashTex, washUv + vec3(0.0, 0.018, 0.0)).g;
+        float foamField = max(foam, fUp * 0.72);
+        float fLarge = vnoise(vPigLocal * 6.5);
+        float fSmall = vnoise(vPigLocal * 15.0 + 1.7);
+        float foamEdge = smoothstep(0.2, 0.34, foamField * (0.72 + 0.45 * fLarge));
+        float mounds = smoothstep(0.42, 0.58, foamField * (0.5 + 0.85 * fLarge));
+        float bubbles = smoothstep(0.58, 0.74, foamField * (0.35 + 0.9 * fSmall));
+        vec3 foamShade = vec3(0.72, 0.78, 0.76);
+        vec3 foamBody = vec3(0.94, 0.96, 0.95);
+        vec3 foamHi = vec3(1.0, 1.0, 0.99);
+        vec3 foamRgb = mix(foamShade, foamBody, foamEdge);
+        foamRgb = mix(foamRgb, foamHi, clamp(mounds * 0.72 + bubbles * 0.9, 0.0, 1.0));
+        foamRgb += vec3(0.06) * mounds * smoothstep(0.15, 0.85, vObjN.y);
+        diffuseColor.rgb = mix(diffuseColor.rgb, foamRgb, foamEdge);
+        float hitD = length(vPigLocal - uHitPos);
+        float hitGlow = exp(-hitD * hitD / max(2.0 * uHitSig * uHitSig, 1e-4));
+        float press = clamp(uHitAmp / 0.018, 0.0, 1.0);
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.9, 0.95, 0.97), hitGlow * press * 0.72);
       }`,
     );
     shader.fragmentShader = shader.fragmentShader.replace(
@@ -446,15 +469,17 @@ function applyPigMaterial(material) {
         float dUpR = texture(uWashTex, wuv + vec3(0.0, 0.02, 0.0)).r;
         float dripR = smoothstep(0.42, 0.78, dUpR) * (1.0 - smoothstep(0.12, 0.5, washR.r));
         float mudMask = clamp(smoothstep(0.18, 0.42, washR.r) + dripR * 0.9, 0.0, 1.0);
-        float foamClump = smoothstep(0.28, 0.62, washR.g);
-        float wet = (1.0 - mudMask) * (1.0 - foamClump);
-        roughnessFactor = mix(roughnessFactor, 0.94, mudMask * 0.85);
-        roughnessFactor = mix(roughnessFactor, 0.16, wet * 0.82);
-        roughnessFactor = mix(roughnessFactor, 0.55, foamClump * 0.45);
+        float foamEdge = smoothstep(0.2, 0.4, max(washR.g, texture(uWashTex, wuv + vec3(0.0, 0.018, 0.0)).g));
+        float wet = (1.0 - mudMask) * (1.0 - foamEdge);
+        roughnessFactor = mix(roughnessFactor, 0.96, mudMask * 0.9);
+        roughnessFactor = mix(roughnessFactor, 0.14, wet * 0.85);
+        roughnessFactor = mix(roughnessFactor, 0.42, foamEdge * 0.7);
+        float hitGlowR = exp(-dot(vPigLocal - uHitPos, vPigLocal - uHitPos) / max(2.0 * uHitSig * uHitSig, 1e-4));
+        roughnessFactor = mix(roughnessFactor, 0.06, hitGlowR * clamp(uHitAmp / 0.018, 0.0, 1.0));
       }`,
     );
   };
-  material.customProgramCacheKey = () => "pig-wash-jet-jaw-v5";
+  material.customProgramCacheKey = () => "pig-dent-jet-v7";
   material.needsUpdate = true;
 }
 
@@ -619,7 +644,7 @@ function writeCell(ix, iy, iz, dirt, foam) {
   washData[o + 1] = nextF;
 }
 
-function splat(local, mode, dt) {
+function splat(local, mode, dt, strength = 1, radiusScale = 1) {
   const cx = ((local.x - WASH_MIN.x) / WASH_SIZE.x) * GX;
   const cy = ((local.y - WASH_MIN.y) / WASH_SIZE.y) * GY;
   const cz = ((local.z - WASH_MIN.z) / WASH_SIZE.z) * GZ;
@@ -643,19 +668,20 @@ function splat(local, mode, dt) {
         const dz = pz - local.z;
         const d2 = dx * dx + dy * dy + dz * dz;
         const nEdge = hash3(ix * 3 + 1, iy * 5 + 2, iz * 7 + 3);
-        const rad = SPLAT_RADIUS * (0.78 + 0.36 * nEdge);
+        const reach = SPLAT_RADIUS * radiusScale * (mode === "foam" ? 1.28 : 1);
+        const rad = reach * (0.78 + 0.36 * nEdge);
         if (d2 > rad * rad) continue;
-        const fall = Math.pow(1 - Math.sqrt(d2) / rad, 1.35);
+        const fall = Math.pow(1 - Math.sqrt(d2) / rad, 1.35) * strength;
         const o = cellOffset(ix, iy, iz);
         let dirt = washData[o];
         let foam = washData[o + 1];
         if (mode === "foam") {
-          foam = Math.min(255, foam + 520 * fall * dt);
-          dirt = Math.max(0, dirt - 28 * fall * dt);
+          foam = Math.min(255, foam + 820 * fall * dt);
+          dirt = Math.max(0, dirt - 22 * fall * dt);
         } else {
-          const boost = 1 + (foam / 255) * 1.5;
-          dirt = Math.max(0, dirt - 300 * boost * fall * dt);
-          foam = Math.max(0, foam - 460 * fall * dt);
+          const boost = 1 + (foam / 255) * 1.7;
+          dirt = Math.max(0, dirt - 320 * boost * fall * dt);
+          foam = Math.max(0, foam - 640 * fall * dt);
         }
         writeCell(ix, iy, iz, dirt, foam);
       }
@@ -690,112 +716,89 @@ function makeSprite() {
 }
 
 const sprite = makeSprite();
-function makePoints(count, size) {
-  const geometry = new THREE.BufferGeometry();
-  const positions = new Float32Array(count * 3);
-  positions.fill(0);
-  for (let i = 1; i < positions.length; i += 3) positions[i] = -6;
-  geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-  const material = new THREE.PointsMaterial({
-    map: sprite,
-    color: 0xffffff,
-    size,
-    transparent: true,
-    depthWrite: false,
-    opacity: 0.88,
-    sizeAttenuation: true,
-    vertexColors: false,
-  });
-  const points = new THREE.Points(geometry, material);
-  points.frustumCulled = false;
-  points.renderOrder = 3;
-  scene.add(points);
-  const life = new Float32Array(count);
-  const maxLife = new Float32Array(count);
-  const vel = new Float32Array(count * 3);
-  const grav = new Float32Array(count);
-  return { points, life, maxLife, vel, grav, cursor: 0, count };
+const GEARS = [
+  { label: "弱", speed: 4.6, spread: 0.055, rate: 680, splash: 16, kick: 1.15, wash: 0.78, radius: 0.9, drain: 0.72, dent: 0.012 },
+  { label: "中", speed: 7.8, spread: 0.03, rate: 900, splash: 24, kick: 1.9, wash: 1, radius: 1, drain: 0.95, dent: 0.018 },
+  { label: "强", speed: 11.4, spread: 0.02, rate: 1080, splash: 34, kick: 2.6, wash: 1.3, radius: 1.1, drain: 1.2, dent: 0.024 },
+  { label: "劲", speed: 14.2, spread: 0.014, rate: 1200, splash: 42, kick: 3.2, wash: 1.48, radius: 1.18, drain: 1.4, dent: 0.03 },
+];
+function currentGear() {
+  return GEARS[Math.max(0, Math.min(GEARS.length - 1, game.gear | 0))];
 }
-const waterPoints = makePoints(640, 0.018);
-const foamPoints = makePoints(280, 0.032);
-waterPoints.points.material.color.set(0xf4fbff);
-foamPoints.points.material.color.set(0xf7f4ee);
-waterPoints.points.material.blending = THREE.NormalBlending;
-foamPoints.points.material.opacity = 0.82;
-
-function spawnDrop(pool, x, y, z, vx, vy, vz, life, gravity) {
+const _dropObj = new THREE.Object3D();
+const _zeroDrop = new THREE.Matrix4().makeScale(0, 0, 0);
+function makeDropPool(count, color, opacity) {
+  const mesh = new THREE.InstancedMesh(
+    new THREE.SphereGeometry(1, 6, 5),
+    new THREE.MeshBasicMaterial({ color, transparent: true, opacity, depthWrite: false }),
+    count,
+  );
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 4;
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  scene.add(mesh);
+  for (let i = 0; i < count; i++) mesh.setMatrixAt(i, _zeroDrop);
+  return {
+    mesh,
+    count,
+    cursor: 0,
+    pos: new Float32Array(count * 3),
+    vel: new Float32Array(count * 3),
+    life: new Float32Array(count),
+    max: new Float32Array(count),
+    size: new Float32Array(count),
+    grav: new Float32Array(count),
+    drag: new Float32Array(count),
+    turb: new Float32Array(count),
+  };
+}
+const waterDrops = makeDropPool(1000, 0xf5fbff, 0.94);
+const foamDrops = makeDropPool(480, 0xf3f0e8, 0.8);
+function spawnDrop(pool, x, y, z, vx, vy, vz, life, size, gravity, drag, turb) {
   const i = pool.cursor;
   pool.cursor = (pool.cursor + 1) % pool.count;
-  const p = pool.points.geometry.attributes.position.array;
-  p[i * 3] = x;
-  p[i * 3 + 1] = y;
-  p[i * 3 + 2] = z;
-  pool.vel[i * 3] = vx;
-  pool.vel[i * 3 + 1] = vy;
-  pool.vel[i * 3 + 2] = vz;
+  const b = i * 3;
+  pool.pos[b] = x;
+  pool.pos[b + 1] = y;
+  pool.pos[b + 2] = z;
+  pool.vel[b] = vx;
+  pool.vel[b + 1] = vy;
+  pool.vel[b + 2] = vz;
   pool.life[i] = life;
-  pool.maxLife[i] = life;
+  pool.max[i] = life;
+  pool.size[i] = size;
   pool.grav[i] = gravity;
+  pool.drag[i] = drag;
+  pool.turb[i] = turb;
 }
-
-function stepPoints(pool, dt) {
-  const p = pool.points.geometry.attributes.position.array;
+function stepDrops(pool, dt) {
   let dirty = false;
   for (let i = 0; i < pool.count; i++) {
     if (pool.life[i] <= 0) continue;
     dirty = true;
     pool.life[i] -= dt;
     if (pool.life[i] <= 0) {
-      p[i * 3 + 1] = -8;
+      pool.mesh.setMatrixAt(i, _zeroDrop);
       continue;
     }
-    pool.vel[i * 3 + 1] -= pool.grav[i] * dt;
-    p[i * 3] += pool.vel[i * 3] * dt;
-    p[i * 3 + 1] += pool.vel[i * 3 + 1] * dt;
-    p[i * 3 + 2] += pool.vel[i * 3 + 2] * dt;
+    const damp = Math.exp(-pool.drag[i] * dt);
+    const b = i * 3;
+    const wobble = pool.turb[i] * dt;
+    pool.vel[b] = pool.vel[b] * damp + (Math.random() - 0.5) * wobble;
+    pool.vel[b + 1] = pool.vel[b + 1] * damp - pool.grav[i] * dt;
+    pool.vel[b + 2] = pool.vel[b + 2] * damp + (Math.random() - 0.5) * wobble;
+    pool.pos[b] += pool.vel[b] * dt;
+    pool.pos[b + 1] += pool.vel[b + 1] * dt;
+    pool.pos[b + 2] += pool.vel[b + 2] * dt;
+    const fade = Math.max(0.35, pool.life[i] / pool.max[i]);
+    _dropObj.position.set(pool.pos[b], pool.pos[b + 1], pool.pos[b + 2]);
+    _dropObj.scale.setScalar(pool.size[i] * fade);
+    _dropObj.rotation.set(0, 0, 0);
+    _dropObj.updateMatrix();
+    pool.mesh.setMatrixAt(i, _dropObj.matrix);
   }
-  if (dirty) pool.points.geometry.attributes.position.needsUpdate = true;
+  if (dirty) pool.mesh.instanceMatrix.needsUpdate = true;
 }
-
-function makeJet(radiusA, radiusB, color, opacity) {
-  const mesh = new THREE.Mesh(
-    new THREE.CylinderGeometry(radiusA, radiusB, 1, 8, 1, true),
-    new THREE.MeshBasicMaterial({
-      color,
-      transparent: true,
-      opacity,
-      depthWrite: false,
-      blending: THREE.AdditiveBlending,
-      side: THREE.DoubleSide,
-    }),
-  );
-  mesh.visible = false;
-  mesh.frustumCulled = false;
-  mesh.renderOrder = 4;
-  scene.add(mesh);
-  return mesh;
-}
-const jetCore = makeJet(0.0016, 0.0007, 0xffffff, 0.95);
-const jetMist = makeJet(0.006, 0.0024, 0xd7f6ff, 0.16);
-
-const streakCount = 48;
-const streaks = new THREE.InstancedMesh(
-  new THREE.PlaneGeometry(1, 1),
-  new THREE.MeshBasicMaterial({
-    color: 0xffffff,
-    transparent: true,
-    opacity: 0.72,
-    depthWrite: false,
-    blending: THREE.AdditiveBlending,
-    side: THREE.DoubleSide,
-  }),
-  streakCount,
-);
-streaks.frustumCulled = false;
-streaks.renderOrder = 4;
-streaks.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-scene.add(streaks);
-
 const bloom = new THREE.Sprite(
   new THREE.SpriteMaterial({
     map: sprite,
@@ -810,39 +813,30 @@ bloom.visible = false;
 bloom.renderOrder = 5;
 scene.add(bloom);
 
-function buildHose() {
+function buildTip() {
   const group = new THREE.Group();
-  group.name = "hose";
-  const green = new THREE.MeshStandardMaterial({ color: 0x1e7a43, roughness: 0.42, metalness: 0.04 });
-  const metal = new THREE.MeshStandardMaterial({ color: 0xd5dbe0, roughness: 0.22, metalness: 0.88 });
-  const yellow = new THREE.MeshStandardMaterial({ color: 0xe0ae2d, roughness: 0.38, metalness: 0.12 });
-  const black = new THREE.MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.62, metalness: 0.08 });
-  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.12, 0.038), green);
-  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.07, 0.016), black);
-  grip.position.set(0.01, -0.01, 0.026);
-  grip.rotation.x = 0.4;
-  const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.22, 12), metal);
-  tube.rotation.z = Math.PI / 2;
-  tube.position.set(0.13, 0.05, 0);
-  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.02, 12), metal);
+  group.name = "nozzleTip";
+  const metal = new THREE.MeshStandardMaterial({ color: 0xd5dbe0, roughness: 0.22, metalness: 0.86 });
+  const yellow = new THREE.MeshStandardMaterial({ color: 0xe2b43a, roughness: 0.38, metalness: 0.12 });
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.014, 0.012, 12), metal);
   collar.rotation.z = Math.PI / 2;
-  collar.position.set(0.22, 0.05, 0);
-  const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.013, 0.05, 12), yellow);
-  nozzle.rotation.z = Math.PI / 2;
-  nozzle.position.set(0.255, 0.05, 0);
-  group.add(handle, grip, tube, collar, nozzle);
+  const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.005, 0.036, 12), yellow);
+  tip.rotation.z = Math.PI / 2;
+  tip.position.set(0.022, 0, 0);
+  group.add(collar, tip);
   group.traverse((obj) => {
     if (obj.isMesh) {
       obj.castShadow = false;
       obj.receiveShadow = false;
+      obj.frustumCulled = false;
     }
   });
   return group;
 }
-const hose = buildHose();
+const hose = buildTip();
 hose.frustumCulled = false;
 scene.add(hose);
-const hoseOffset = new THREE.Vector3(0.05, -0.04, -0.46);
+const hoseOffset = new THREE.Vector3(0.07, -0.05, -0.42);
 
 const _nozzle = new THREE.Vector3();
 const _aim = new THREE.Vector3();
@@ -862,21 +856,14 @@ let dripClock = 0;
 const dripState = { time: 0, point: new THREE.Vector3(), normal: new THREE.Vector3(0, 1, 0) };
 
 function hideJet() {
-  jetCore.visible = false;
-  jetMist.visible = false;
   bloom.visible = false;
-  for (let i = 0; i < streakCount; i++) {
-    _streakMat.makeScale(0, 0, 0);
-    streaks.setMatrixAt(i, _streakMat);
-  }
-  streaks.instanceMatrix.needsUpdate = true;
 }
 
 function aimHose(worldTarget) {
   camera.updateMatrixWorld();
   const origin = hoseOffset.clone().applyMatrix4(camera.matrixWorld);
   hose.position.copy(origin);
-  hose.scale.setScalar(0.58);
+  hose.scale.setScalar(1.15);
   const dir = worldTarget.clone().sub(origin);
   if (dir.lengthSq() < 1e-8) return;
   dir.normalize();
@@ -885,56 +872,14 @@ function aimHose(worldTarget) {
 }
 
 function nozzleWorld() {
-  _nozzle.set(0.282, 0.05, 0);
+  _nozzle.set(0.042, 0, 0);
   _nozzle.applyMatrix4(hose.matrixWorld);
   return _nozzle;
 }
 
-function placeJet(from, to, foam) {
-  _dir.subVectors(to, from);
-  const len = _dir.length();
-  if (len < 0.05) {
-    hideJet();
-    return;
-  }
-  _dir.multiplyScalar(1 / len);
-  const mid = _mid.copy(from).addScaledVector(_dir, len * 0.5);
-  const q = new THREE.Quaternion().setFromUnitVectors(_up, _dir);
-  jetCore.visible = true;
-  jetMist.visible = true;
-  jetCore.position.copy(mid);
-  jetMist.position.copy(mid);
-  jetCore.quaternion.copy(q);
-  jetMist.quaternion.copy(q);
-  jetCore.scale.set(foam ? 1.15 : 1, len, foam ? 1.15 : 1);
-  jetMist.scale.set(foam ? 1.35 : 1, len, foam ? 1.35 : 1);
-  jetCore.material.color.set(foam ? 0xfffaf2 : 0xffffff);
-  jetMist.material.color.set(foam ? 0xf3efe6 : 0xd7f6ff);
-  const seg = len / streakCount;
-  for (let i = 0; i < streakCount; i++) {
-    const along = (i + 0.35) / streakCount;
-    _sp.copy(from).lerp(to, along);
-    _sp.x += (Math.random() - 0.5) * 0.008;
-    _sp.y += (Math.random() - 0.5) * 0.008;
-    _sp.z += (Math.random() - 0.5) * 0.008;
-    _sy.copy(_dir);
-    _sz.subVectors(camera.position, _sp);
-    if (_sz.lengthSq() < 1e-6) _sz.set(0, 0, 1);
-    _sz.normalize();
-    _sx.crossVectors(_sy, _sz).normalize();
-    _sz.crossVectors(_sx, _sy).normalize();
-    const width = (foam ? 0.006 : 0.0032) * (0.65 + along * 0.7);
-    const length = Math.max(0.03, seg * 1.6);
-    _streakMat.makeBasis(_sx, _sy, _sz);
-    _streakMat.scale(new THREE.Vector3(width, length, 1));
-    _streakMat.setPosition(_sp);
-    streaks.setMatrixAt(i, _streakMat);
-  }
-  streaks.instanceMatrix.needsUpdate = true;
-}
-
 const game = {
   mode: "water",
+  gear: 1,
   tank: TANK_MAX,
   cleared: false,
   shownClean: 0,
@@ -954,6 +899,7 @@ const raycaster = new THREE.Raycaster();
 const ndc = new THREE.Vector2();
 const clock = new THREE.Clock();
 let sprayCarry = 0;
+let splashClock = 0;
 
 const blink = { value: 0, phase: "wait", t: 0, wait: 0.55, hold: 0.06, double: false, lock: null };
 const gaze = { x: 0, y: 0, tx: 0, ty: 0, t: 0, wait: 1.2 };
@@ -1191,28 +1137,30 @@ function stepLife(dt) {
 
 function stepImpact(dt) {
   if (!spray.active) impact.goal = 0;
-  if (impact.amp < 0.0003 && impact.goal < 0.0001) {
+  if (impact.amp < 0.0004 && impact.goal < 0.0001) {
     impact.pos.copy(impact.desired);
     impact.dir.copy(impact.desiredDir);
     if (impact.dir.lengthSq() > 1e-8) impact.dir.normalize();
   } else {
-    const k = 1 - Math.exp(-20 * dt);
+    const follow = spray.active ? 42 : 18;
+    const k = 1 - Math.exp(-follow * dt);
     impact.pos.lerp(impact.desired, k);
     impact.dir.lerp(impact.desiredDir, k);
     if (impact.dir.lengthSq() > 1e-8) impact.dir.normalize();
   }
-  const w = 24;
-  const z = 1.18;
+  const w = impact.goal > 0.001 ? 28 : 40;
+  const z = 1.22;
   const h = dt / 4;
   for (let i = 0; i < 4; i++) {
     const acc = -2 * z * w * impact.vel - w * w * (impact.amp - impact.goal);
     impact.vel += acc * h;
     impact.amp += impact.vel * h;
   }
-  impact.amp = Math.max(0, Math.min(0.006, impact.amp));
+  impact.amp = Math.max(0, Math.min(0.034, impact.amp));
   lifeUniforms.uHitPos.value.copy(impact.pos);
   lifeUniforms.uHitDir.value.copy(impact.dir);
   lifeUniforms.uHitAmp.value = impact.amp;
+  lifeUniforms.uHitSig.value = 0.078 + impact.amp * 1.1;
 }
 
 const STIFF = 11;
@@ -1385,76 +1333,108 @@ function sprayFrame(dt) {
     reactToSpray();
     sprayWas = true;
   }
-  game.tank = Math.max(0, game.tank - TANK_DRAIN * dt);
+  const gear = currentGear();
+  game.tank = Math.max(0, game.tank - gear.drain * dt);
   const aim = aimFromNdc(spray.ndcX, spray.ndcY);
   lastAim.copy(aim.point);
   aimHose(aim.point);
   const from = nozzleWorld().clone();
   const foam = game.mode === "foam";
-  placeJet(from, aim.point, foam);
   _dir.subVectors(aim.point, from);
-  const dist = Math.max(0.15, _dir.length());
+  const dist = Math.max(0.12, _dir.length());
   _dir.multiplyScalar(1 / dist);
-  const speed = dist / 0.07;
-  const pool = foam ? foamPoints : waterPoints;
-  const rate = foam ? 220 : 460;
-  sprayCarry += rate * dt;
+  const pool = foam ? foamDrops : waterDrops;
+  const speed = gear.speed * (foam ? 0.58 : 1);
+  const spread = foam ? Math.max(0.09, gear.spread * 2.6) : gear.spread;
+  sprayCarry += gear.rate * (foam ? 0.7 : 1) * dt;
   let spawned = 0;
-  while (sprayCarry >= 1 && spawned < 28) {
+  while (sprayCarry >= 1 && spawned < 42) {
     sprayCarry -= 1;
     spawned++;
-    const spread = foam ? 0.045 : 0.028;
-    const jitter = _dir.clone();
-    jitter.x += (Math.random() - 0.5) * spread;
-    jitter.y += (Math.random() - 0.5) * spread;
-    jitter.z += (Math.random() - 0.5) * spread;
-    jitter.normalize().multiplyScalar(speed * (0.85 + Math.random() * 0.3));
-    const along = Math.random() * 0.25;
+    const mist = !foam && Math.random() < 0.4;
+    const spr = mist ? spread * 2.4 : spread;
+    const vx = _dir.x + (Math.random() - 0.5) * spr;
+    const vy = _dir.y + (Math.random() - 0.5) * spr;
+    const vz = _dir.z + (Math.random() - 0.5) * spr;
+    const mag = Math.hypot(vx, vy, vz) || 1;
+    const kick = (speed * (foam ? 0.72 + Math.random() * 0.4 : mist ? 0.72 : 0.9 + Math.random() * 0.18)) / mag;
     spawnDrop(
       pool,
-      from.x + _dir.x * dist * along,
-      from.y + _dir.y * dist * along,
-      from.z + _dir.z * dist * along,
-      jitter.x,
-      jitter.y,
-      jitter.z,
-      0.08 + Math.random() * 0.06,
-      foam ? 0.6 : 0.35,
+      from.x,
+      from.y,
+      from.z,
+      vx * kick,
+      vy * kick,
+      vz * kick,
+      foam ? 0.38 + Math.random() * 0.16 : mist ? 0.22 + Math.random() * 0.08 : 0.28 + Math.random() * 0.08,
+      foam ? 0.018 + Math.random() * 0.016 : mist ? 0.006 : 0.011,
+      foam ? 1.6 : mist ? 4.2 : 6.4,
+      foam ? 1.05 : mist ? 1.15 : 0.28,
+      foam ? 1.5 : mist ? 2.6 : 0.45,
     );
   }
   if (aim.hit) {
     _local.copy(aim.hit.point);
     pigMesh.worldToLocal(_local);
-    splat(_local, game.mode, dt);
+    splat(_local, game.mode, dt, gear.wash, gear.radius);
     if (aim.hit.normal) _normal.copy(aim.hit.normal);
     else _normal.set(0, 1, 0);
     _normal.normalize();
     impact.desired.copy(_local);
     impact.desiredDir.copy(_normal).multiplyScalar(-1);
-    impact.goal = 0.0034 * regionScale(_local);
+    impact.goal = gear.dent * (foam ? 0.55 : 1) * regionScale(_local);
     bloom.visible = true;
-    bloom.position.copy(aim.point).addScaledVector(_normal, 0.015);
-    bloom.scale.set(foam ? 0.2 : 0.16, foam ? 0.2 : 0.16, 1);
-    bloom.material.color.set(foam ? 0xfff6ea : 0xffffff);
-    dripState.time = 1.15;
+    bloom.position.copy(aim.point).addScaledVector(_normal, 0.02);
+    const flash = foam ? 0.1 : 0.05 + gear.kick * 0.012;
+    bloom.scale.set(flash, flash, 1);
+    bloom.material.color.set(foam ? 0xfff8ee : 0xffffff);
+    dripState.time = 1.2;
     dripState.point.copy(aim.point);
     dripState.normal.copy(_normal);
-    const splash = foam ? foamPoints : waterPoints;
-    for (let i = 0; i < 8; i++) {
-      const side = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5);
-      side.addScaledVector(_normal, 0.8).normalize();
-      const kick = 0.7 + Math.random() * 1.5;
-      spawnDrop(
-        splash,
-        aim.point.x + _normal.x * 0.01,
-        aim.point.y + _normal.y * 0.01,
-        aim.point.z + _normal.z * 0.01,
-        side.x * kick,
-        side.y * kick,
-        side.z * kick,
-        0.18 + Math.random() * 0.12,
-        2.6,
-      );
+    splashClock += dt;
+    if (splashClock > 0.042) {
+      splashClock = 0;
+      const splash = foam ? foamDrops : waterDrops;
+      const count = foam ? Math.round(gear.splash * 0.65) : gear.splash;
+      for (let i = 0; i < count; i++) {
+        _sx.set(Math.random() * 2 - 1, Math.random() * 2 - 1, Math.random() * 2 - 1);
+        if (_sx.dot(_normal) < 0) _sx.negate();
+        _sx.addScaledVector(_normal, 0.5 + Math.random() * 0.85);
+        _sx.y += 0.55 + Math.random() * 1.05;
+        if (Math.random() < 0.34) _sx.addScaledVector(_dir, -(0.45 + Math.random() * 0.75));
+        const kick = gear.kick * (0.6 + Math.random() * 0.75) * (foam ? 0.5 : 1);
+        _sx.normalize().multiplyScalar(kick);
+        spawnDrop(
+          splash,
+          aim.point.x + _normal.x * 0.012,
+          aim.point.y + _normal.y * 0.012,
+          aim.point.z + _normal.z * 0.012,
+          _sx.x,
+          _sx.y,
+          _sx.z,
+          0.22 + Math.random() * 0.2,
+          (foam ? 0.016 : 0.009) * (0.75 + Math.random() * 0.6),
+          foam ? 3.1 : 8.2,
+          0.65,
+          foam ? 0.7 : 1.1,
+        );
+      }
+      for (let i = 0; i < 4; i++) {
+        spawnDrop(
+          waterDrops,
+          aim.point.x,
+          aim.point.y - 0.008,
+          aim.point.z,
+          (Math.random() - 0.5) * 0.18,
+          -0.12 - Math.random() * 0.25,
+          (Math.random() - 0.5) * 0.18,
+          0.55 + Math.random() * 0.25,
+          0.0042,
+          9.2,
+          0.12,
+          0.15,
+        );
+      }
     }
     if (game.mode === "water") {
       const soft = softMaskCpu(_local);
@@ -1500,7 +1480,14 @@ function updateHud(force) {
   if (game.cleared) hintEl.textContent = "已经洗干净了。";
   else if (game.tank <= 0) hintEl.textContent = "水箱空了。点「重来」重新装满。";
   else if (game.mode === "foam") hintEl.textContent = "泡沫会结在身上。换清水冲掉泡沫和剩下的泥。看肚皮可以冲到下面。";
-  else hintEl.textContent = "按住水枪冲洗。点「看肚皮」冲肚子和腿内侧，双指也能转到下面。";
+  else hintEl.textContent = "按住冲洗。水速分弱、中、强、劲。看肚皮可以冲到下面。";
+}
+
+function setGear(index) {
+  game.gear = Math.max(0, Math.min(GEARS.length - 1, index | 0));
+  document.querySelectorAll("#gear-row button").forEach((btn) => {
+    btn.classList.toggle("is-on", Number(btn.dataset.gear) === game.gear);
+  });
 }
 
 function setMode(mode) {
@@ -1551,6 +1538,11 @@ function retry() {
   updateHud(true);
 }
 
+document.getElementById("gear-row")?.addEventListener("click", (event) => {
+  const btn = event.target.closest("button");
+  if (!btn || btn.dataset.gear == null) return;
+  setGear(Number(btn.dataset.gear));
+});
 waterBtn.addEventListener("click", () => setMode("water"));
 foamBtn.addEventListener("click", () => setMode("foam"));
 document.getElementById("retry").addEventListener("click", retry);
@@ -1661,15 +1653,18 @@ function animate() {
         dripClock = 0;
         const n = dripState.normal;
         spawnDrop(
-          waterPoints,
+          waterDrops,
           dripState.point.x + n.x * 0.02,
           dripState.point.y + n.y * 0.02 - 0.01,
           dripState.point.z + n.z * 0.02,
           n.x * 0.12 + (Math.random() - 0.5) * 0.06,
-          -0.05,
+          -0.08,
           n.z * 0.12 + (Math.random() - 0.5) * 0.06,
-          0.75,
-          3.4,
+          0.7,
+          0.004,
+          9,
+          0.15,
+          0.1,
         );
       }
     }
@@ -1677,8 +1672,8 @@ function animate() {
     stepSoftBody(dt);
     updateHud(false);
   }
-  stepPoints(waterPoints, dt);
-  stepPoints(foamPoints, dt);
+  stepDrops(waterDrops, dt);
+  stepDrops(foamDrops, dt);
   renderer.render(scene, camera);
 }
 animate();
