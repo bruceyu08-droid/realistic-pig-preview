@@ -19,7 +19,7 @@ const EAR_TIP_R = new THREE.Vector3(0.39, 0.812, 0.37);
 
 const TANK_MAX = 100;
 const TANK_DRAIN = 0.9;
-const SPLAT_RADIUS = 0.135;
+const SPLAT_RADIUS = 0.088;
 const CLEAN_DIRT = 0.12;
 const CLEAN_FOAM = 0.05;
 
@@ -426,9 +426,9 @@ function applyPigMaterial(material) {
         diffuseColor.rgb = mix(diffuseColor.rgb, lidCol, lid * 0.96);
         diffuseColor.rgb *= 1.0 - crease * smoothstep(0.02, 0.35, uBlink) * 0.45;
         float dUp = texture(uWashTex, washUv + vec3(0.0, 0.02, 0.0)).r;
-        float drip = smoothstep(0.42, 0.78, dUp) * (1.0 - smoothstep(0.12, 0.5, dirt));
-        float thick = smoothstep(0.18, 0.42, dirt);
-        float mudMask = clamp(thick + drip * 0.9, 0.0, 1.0);
+        float drip = smoothstep(0.55, 0.92, dUp) * (1.0 - smoothstep(0.02, 0.28, dirt)) * 0.55;
+        float thick = smoothstep(0.22, 0.62, dirt);
+        float mudMask = clamp(max(thick, drip), 0.0, 1.0);
         float fold = smoothstep(0.2, -0.65, vObjN.y);
         float blotch = vnoise(vPigLocal * 1.8);
         float blotchB = vnoise(vPigLocal * 4.6 + 3.7);
@@ -468,7 +468,7 @@ function applyPigMaterial(material) {
         vec4 washR = texture(uWashTex, wuv);
         float dUpR = texture(uWashTex, wuv + vec3(0.0, 0.02, 0.0)).r;
         float dripR = smoothstep(0.42, 0.78, dUpR) * (1.0 - smoothstep(0.12, 0.5, washR.r));
-        float mudMask = clamp(smoothstep(0.18, 0.42, washR.r) + dripR * 0.9, 0.0, 1.0);
+        float mudMask = clamp(smoothstep(0.22, 0.62, washR.r), 0.0, 1.0);
         float foamEdge = smoothstep(0.2, 0.4, max(washR.g, texture(uWashTex, wuv + vec3(0.0, 0.018, 0.0)).g));
         float wet = (1.0 - mudMask) * (1.0 - foamEdge);
         roughnessFactor = mix(roughnessFactor, 0.96, mudMask * 0.9);
@@ -648,9 +648,10 @@ function splat(local, mode, dt, strength = 1, radiusScale = 1) {
   const cx = ((local.x - WASH_MIN.x) / WASH_SIZE.x) * GX;
   const cy = ((local.y - WASH_MIN.y) / WASH_SIZE.y) * GY;
   const cz = ((local.z - WASH_MIN.z) / WASH_SIZE.z) * GZ;
-  const rx = (SPLAT_RADIUS / WASH_SIZE.x) * GX;
-  const ry = (SPLAT_RADIUS / WASH_SIZE.y) * GY;
-  const rz = (SPLAT_RADIUS / WASH_SIZE.z) * GZ;
+  const reachMax = SPLAT_RADIUS * radiusScale * (mode === "foam" ? 1.28 : 1) * 1.16;
+  const rx = (reachMax / WASH_SIZE.x) * GX;
+  const ry = (reachMax / WASH_SIZE.y) * GY;
+  const rz = (reachMax / WASH_SIZE.z) * GZ;
   const x0 = Math.max(0, Math.floor(cx - rx));
   const x1 = Math.min(GX - 1, Math.ceil(cx + rx));
   const y0 = Math.max(0, Math.floor(cy - ry));
@@ -671,17 +672,18 @@ function splat(local, mode, dt, strength = 1, radiusScale = 1) {
         const reach = SPLAT_RADIUS * radiusScale * (mode === "foam" ? 1.28 : 1);
         const rad = reach * (0.78 + 0.36 * nEdge);
         if (d2 > rad * rad) continue;
-        const fall = Math.pow(1 - Math.sqrt(d2) / rad, 1.35) * strength;
+        const speck = 0.22 + hash3(ix + 19, iy + 7, iz + 13) * 1.55;
+        const fall = Math.pow(1 - Math.sqrt(d2) / rad, 1.6) * strength * speck;
         const o = cellOffset(ix, iy, iz);
         let dirt = washData[o];
         let foam = washData[o + 1];
         if (mode === "foam") {
-          foam = Math.min(255, foam + 820 * fall * dt);
-          dirt = Math.max(0, dirt - 22 * fall * dt);
+          foam = Math.min(255, foam + 520 * fall * dt);
+          dirt = Math.max(0, dirt - 18 * fall * dt);
         } else {
-          const boost = 1 + (foam / 255) * 1.7;
-          dirt = Math.max(0, dirt - 320 * boost * fall * dt);
-          foam = Math.max(0, foam - 640 * fall * dt);
+          const boost = 1 + (foam / 255) * 1.35;
+          dirt = Math.max(0, dirt - 260 * boost * fall * dt);
+          foam = Math.max(0, foam - 210 * fall * dt);
         }
         writeCell(ix, iy, iz, dirt, foam);
       }
@@ -855,8 +857,57 @@ const _barrel = new THREE.Vector3(1, 0, 0);
 let dripClock = 0;
 const dripState = { time: 0, point: new THREE.Vector3(), normal: new THREE.Vector3(0, 1, 0) };
 
+function makeRibbon(radiusTip, radiusNozzle, color, opacity) {
+  const mesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(radiusTip, radiusNozzle, 1, 7, 1, true),
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+    }),
+  );
+  mesh.visible = false;
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 4;
+  scene.add(mesh);
+  return mesh;
+}
+const jetCore = makeRibbon(0.0018, 0.0008, 0xffffff, 0.95);
+const jetMist = makeRibbon(0.0065, 0.0022, 0xeef8ff, 0.28);
+
 function hideJet() {
+  jetCore.visible = false;
+  jetMist.visible = false;
   bloom.visible = false;
+}
+
+function placeJet(from, to, foam) {
+  _sy.subVectors(to, from);
+  const len = _sy.length();
+  if (len < 0.05) {
+    jetCore.visible = false;
+    jetMist.visible = false;
+    return;
+  }
+  _sy.multiplyScalar(1 / len);
+  _mid.copy(from).addScaledVector(_sy, len * 0.5);
+  const q = new THREE.Quaternion().setFromUnitVectors(_up, _sy);
+  jetCore.visible = true;
+  jetMist.visible = true;
+  jetCore.position.copy(_mid);
+  jetMist.position.copy(_mid);
+  jetCore.quaternion.copy(q);
+  jetMist.quaternion.copy(q);
+  const widen = foam ? 1.7 : 1;
+  jetCore.scale.set(widen, len, widen);
+  jetMist.scale.set(foam ? 2.1 : 1, len, foam ? 2.1 : 1);
+  jetCore.material.color.set(foam ? 0xfffaf3 : 0xffffff);
+  jetMist.material.color.set(foam ? 0xf4efe4 : 0xe7f6ff);
+  jetCore.material.opacity = foam ? 0.55 : 0.92;
+  jetMist.material.opacity = foam ? 0.34 : 0.2;
 }
 
 function aimHose(worldTarget) {
@@ -1343,34 +1394,35 @@ function sprayFrame(dt) {
   _dir.subVectors(aim.point, from);
   const dist = Math.max(0.12, _dir.length());
   _dir.multiplyScalar(1 / dist);
+  placeJet(from, aim.point, foam);
   const pool = foam ? foamDrops : waterDrops;
-  const speed = gear.speed * (foam ? 0.58 : 1);
-  const spread = foam ? Math.max(0.09, gear.spread * 2.6) : gear.spread;
-  sprayCarry += gear.rate * (foam ? 0.7 : 1) * dt;
+  const speed = gear.speed * (foam ? 0.5 : 1);
+  const spread = foam ? Math.max(0.08, gear.spread * 2.2) : gear.spread * 0.65;
+  sprayCarry += (foam ? 420 : 520) * dt;
   let spawned = 0;
-  while (sprayCarry >= 1 && spawned < 42) {
+  while (sprayCarry >= 1 && spawned < 24) {
     sprayCarry -= 1;
     spawned++;
-    const mist = !foam && Math.random() < 0.4;
-    const spr = mist ? spread * 2.4 : spread;
-    const vx = _dir.x + (Math.random() - 0.5) * spr;
-    const vy = _dir.y + (Math.random() - 0.5) * spr;
-    const vz = _dir.z + (Math.random() - 0.5) * spr;
-    const mag = Math.hypot(vx, vy, vz) || 1;
-    const kick = (speed * (foam ? 0.72 + Math.random() * 0.4 : mist ? 0.72 : 0.9 + Math.random() * 0.18)) / mag;
+    const mist = !foam && Math.random() < 0.45;
+    const along = 0.02 + Math.random() * 0.72;
+    const spr = (mist ? spread * 2.2 : spread) * along;
+    const px = from.x + _dir.x * dist * along + (Math.random() - 0.5) * spr;
+    const py = from.y + _dir.y * dist * along + (Math.random() - 0.5) * spr;
+    const pz = from.z + _dir.z * dist * along + (Math.random() - 0.5) * spr;
+    const fly = speed * (foam ? 0.35 : mist ? 0.45 : 0.7);
     spawnDrop(
       pool,
-      from.x,
-      from.y,
-      from.z,
-      vx * kick,
-      vy * kick,
-      vz * kick,
-      foam ? 0.38 + Math.random() * 0.16 : mist ? 0.22 + Math.random() * 0.08 : 0.28 + Math.random() * 0.08,
-      foam ? 0.018 + Math.random() * 0.016 : mist ? 0.006 : 0.011,
-      foam ? 1.6 : mist ? 4.2 : 6.4,
-      foam ? 1.05 : mist ? 1.15 : 0.28,
-      foam ? 1.5 : mist ? 2.6 : 0.45,
+      px,
+      py,
+      pz,
+      _dir.x * fly,
+      _dir.y * fly,
+      _dir.z * fly,
+      foam ? 0.28 : 0.12 + Math.random() * 0.08,
+      foam ? 0.012 + Math.random() * 0.01 : mist ? 0.0032 : 0.0048,
+      foam ? 0.8 : 0.25,
+      foam ? 0.4 : 0.15,
+      foam ? 0.8 : 0.2,
     );
   }
   if (aim.hit) {
@@ -1385,7 +1437,7 @@ function sprayFrame(dt) {
     impact.goal = gear.dent * (foam ? 0.55 : 1) * regionScale(_local);
     bloom.visible = true;
     bloom.position.copy(aim.point).addScaledVector(_normal, 0.02);
-    const flash = foam ? 0.1 : 0.05 + gear.kick * 0.012;
+    const flash = foam ? 0.09 : 0.055 + gear.kick * 0.008;
     bloom.scale.set(flash, flash, 1);
     bloom.material.color.set(foam ? 0xfff8ee : 0xffffff);
     dripState.time = 1.2;
