@@ -1,0 +1,112 @@
+{
+  "slug": "pig",
+  "name": {
+    "en": "Pig",
+    "de": "Schwein",
+    "es": "Cerdo"
+  },
+  "summary": "Young pink domestic pig with large upright ears, a moist snout and faint grey patches on its back: a detailed, realistic farm animal for renders.",
+  "category": "animals",
+  "categoryName": "Animals",
+  "tier": "high-detail",
+  "style": "realistic",
+  "kit": null,
+  "tags": [
+    "pig",
+    "farm animal",
+    "piglet",
+    "animal",
+    "farming sim",
+    "realistic"
+  ],
+  "license": "CC0-1.0",
+  "origin": {
+    "method": "ai-assisted",
+    "aiContent": true,
+    "aiAssistedCode": null,
+    "detail": "Base mesh and textures generated with an AI image-to-3D tool (Meshy), then cleaned up, scaled, textured and checked in Blender.",
+    "licenseUrl": "https://grab3d.com/dl/pig/LICENSE.txt",
+    "manifestUrl": "https://grab3d.com/dl/pig/manifest.json"
+  },
+  "created": "2026-09-28",
+  "specs": {
+    "triangles": 255506,
+    "trianglesLight": 127752,
+    "texturePx": 4096,
+    "texturePxLight": 1024,
+    "maps": [
+      "baseColor",
+      "roughness",
+      "metallic",
+      "normal"
+    ],
+    "dimensionsMeters": [
+      0.884,
+      1.4,
+      0.849
+    ],
+    "movingParts": []
+  },
+  "media": {
+    "thumbnail": "https://grab3d.com/m/pig/pig-3d-model.webp",
+    "thumbnailSmall": "https://grab3d.com/m/pig/thumb-400.webp",
+    "og": "https://grab3d.com/m/pig/og.jpg",
+    "previewGlb": "https://grab3d.com/m/pig/preview.glb",
+    "turntableWebm": "https://grab3d.com/m/pig/turntable.webm",
+    "turntableMp4": "https://grab3d.com/m/pig/turntable.mp4"
+  },
+  "files": [
+    {
+      "format": "glb",
+      "variant": "full",
+      "file": "pig.glb",
+      "bytes": 12761020,
+      "url": "https://grab3d.com/dl/pig/pig.glb"
+    },
+    {
+      "format": "fbx",
+      "variant": "full",
+      "file": "pig.fbx",
+      "bytes": 19588844,
+      "url": "https://grab3d.com/dl/pig/pig.fbx"
+    },
+    {
+      "format": "blend",
+      "variant": "full",
+      "file": "pig.blend",
+      "bytes": 15008448,
+      "url": "https://grab3d.com/dl/pig/pig.blend"
+    },
+    {
+      "format": "usdz",
+      "variant": "full",
+      "file": "pig.usdz",
+      "bytes": 18259436,
+      "url": "https://grab3d.com/dl/pig/pig.usdz"
+    },
+    {
+      "format": "obj-zip",
+      "variant": "full",
+      "file": "pig-obj.zip",
+      "bytes": 10763700,
+      "url": "https://grab3d.com/dl/pig/pig-obj.zip"
+    },
+    {
+      "format": "glb",
+      "variant": "light",
+      "file": "pig-light.glb",
+      "bytes": 4188304,
+      "url": "https://grab3d.com/dl/pig/pig-light.glb"
+    },
+    {
+      "format": "fbx",
+      "variant": "light",
+      "file": "pig-light.fbx",
+      "bytes": 8133180,
+      "url": "https://grab3d.com/dl/pig/pig-light.fbx"
+    }
+  ],
+  "rigged": null,
+  "relatedVariant": "low-poly-pig",
+  "page": "https://grab3d.com/models/animals/pig/"
+}
