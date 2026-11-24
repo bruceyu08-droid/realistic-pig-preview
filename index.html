@@ -3,49 +3,206 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, user-scalable=no" />
-    <title>真实小猪试玩</title>
+    <meta name="description" content="竖屏洗小猪。按住用水枪冲掉泥，也可以先喷泡沫再冲干净。" />
+    <title>洗小猪</title>
     <style>
       html, body {
         margin: 0;
         height: 100%;
         overflow: hidden;
-        background: #c9c7c4;
+        background: #141311;
+        color: #2c2926;
         font-family: "PingFang SC", "Noto Sans SC", "Source Han Sans SC", "Microsoft YaHei", sans-serif;
       }
-      canvas {
+      #stage {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        width: min(100vw, calc(100vh * 9 / 16));
+        width: min(100vw, calc(100dvh * 9 / 16));
+        height: min(100vh, calc(100vw * 16 / 9));
+        height: min(100dvh, calc(100vw * 16 / 9));
+        background: #c9c6c0;
+        overflow: hidden;
+        box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.05), 0 18px 50px rgba(0, 0, 0, 0.45);
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+      }
+      #view {
         display: block;
         width: 100%;
         height: 100%;
         touch-action: none;
-        cursor: grab;
       }
-      #loading, #hint {
-        position: fixed;
-        left: 50%;
-        transform: translateX(-50%);
-        pointer-events: none;
+      #loading, #clear {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
         text-align: center;
       }
       #loading {
-        top: 50%;
-        transform: translate(-50%, -50%);
-        color: #4a4744;
-        font-size: 14px;
-        letter-spacing: 0.04em;
-      }
-      #hint {
-        bottom: 20px;
-        max-width: min(520px, calc(100% - 32px));
-        padding: 8px 14px;
-        background: rgba(255, 255, 255, 0.78);
-        color: #4a4744;
-        border: 1px solid rgba(0, 0, 0, 0.08);
-        border-radius: 10px;
-        font-size: 13px;
-        line-height: 1.5;
-        backdrop-filter: blur(8px);
+        z-index: 5;
+        color: #4e4a45;
+        font-size: 15px;
+        letter-spacing: 0.06em;
+        background: rgba(201, 198, 192, 0.92);
       }
       body.is-ready #loading { display: none; }
+      #hud {
+        position: absolute;
+        inset: 0;
+        z-index: 2;
+        pointer-events: none;
+        display: flex;
+        flex-direction: column;
+        justify-content: space-between;
+        padding:
+          calc(12px + env(safe-area-inset-top))
+          14px
+          calc(14px + env(safe-area-inset-bottom));
+        box-sizing: border-box;
+      }
+      .top, .bottom { pointer-events: none; }
+      .top-row, .tank-row, .modes {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+      }
+      .top-row { justify-content: space-between; margin-bottom: 8px; }
+      h1 {
+        margin: 0;
+        font-size: 18px;
+        font-weight: 650;
+        letter-spacing: 0.08em;
+        color: #2a2724;
+      }
+      .pill, .panel {
+        background: rgba(255, 252, 248, 0.84);
+        border: 1px solid rgba(40, 34, 28, 0.08);
+        border-radius: 999px;
+        backdrop-filter: blur(8px);
+      }
+      .pill {
+        padding: 4px 10px;
+        font-size: 13px;
+        color: #3c3834;
+      }
+      #retry-small {
+        pointer-events: auto;
+        border: 0;
+        background: transparent;
+        color: #5c564f;
+        font: inherit;
+        font-size: 13px;
+        padding: 4px 2px;
+        cursor: pointer;
+      }
+      .tank-row { align-items: stretch; }
+      .tank-name {
+        flex: 0 0 auto;
+        font-size: 13px;
+        padding: 0 2px;
+        color: #3a3632;
+        align-self: center;
+      }
+      .tank {
+        position: relative;
+        flex: 1;
+        height: 16px;
+        border-radius: 999px;
+        background: rgba(255, 252, 248, 0.84);
+        border: 1px solid rgba(40, 34, 28, 0.1);
+        overflow: hidden;
+      }
+      #tank-fill {
+        height: 100%;
+        width: 100%;
+        background: linear-gradient(90deg, #2f6f86, #67b4cc);
+        transform-origin: left center;
+      }
+      .tank.is-low #tank-fill {
+        background: linear-gradient(90deg, #8a4b32, #d38a62);
+      }
+      #tank-text {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        padding-right: 8px;
+        font-size: 11px;
+        color: #1d1a17;
+      }
+      .bottom { display: flex; flex-direction: column; gap: 8px; }
+      .modes { pointer-events: auto; }
+      .modes button {
+        flex: 1;
+        border: 1px solid rgba(40, 34, 28, 0.1);
+        background: rgba(255, 252, 248, 0.84);
+        color: #3a3632;
+        font: inherit;
+        font-size: 15px;
+        letter-spacing: 0.12em;
+        padding: 10px 0;
+        border-radius: 12px;
+        cursor: pointer;
+      }
+      .modes button.is-on {
+        color: #f7f4ef;
+        border-color: transparent;
+      }
+      #mode-water.is-on { background: #2c6d84; }
+      #mode-foam.is-on { background: #7d756c; }
+      #hint {
+        margin: 0;
+        padding: 8px 12px;
+        background: rgba(255, 252, 248, 0.78);
+        border-radius: 10px;
+        font-size: 12px;
+        line-height: 1.45;
+        color: #4a453f;
+      }
+      #clear {
+        z-index: 4;
+        background: rgba(28, 26, 24, 0.38);
+        pointer-events: auto;
+      }
+      #clear[hidden] { display: none; }
+      .card {
+        width: min(280px, calc(100% - 48px));
+        padding: 22px 18px 16px;
+        background: rgba(255, 252, 248, 0.96);
+        border-radius: 16px;
+        box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+      }
+      .card h2 {
+        margin: 0 0 8px;
+        font-size: 22px;
+        font-weight: 650;
+        letter-spacing: 0.08em;
+      }
+      .card p {
+        margin: 0 0 16px;
+        font-size: 14px;
+        line-height: 1.5;
+        color: #5c564f;
+      }
+      #retry {
+        width: 100%;
+        border: 0;
+        border-radius: 12px;
+        background: #2c6d84;
+        color: #f7f6f3;
+        font: inherit;
+        font-size: 16px;
+        letter-spacing: 0.12em;
+        padding: 11px 0;
+        cursor: pointer;
+      }
     </style>
     <script type="importmap">
       {
@@ -57,8 +214,41 @@
     </script>
   </head>
   <body>
-    <div id="loading">正在载入 3D 模型…</div>
-    <div id="hint">点按或轻拖小猪的肚皮、腮帮，软肉会微微晃动；在空白处拖动可旋转，滚轮或双指缩放。</div>
+    <div id="stage">
+      <div id="loading">正在载入小猪…</div>
+      <div id="hud">
+        <div class="top">
+          <div class="top-row">
+            <h1>洗小猪</h1>
+            <div style="display:flex;align-items:center;gap:8px">
+              <div class="pill" id="clean-label">清洁度 0%</div>
+              <button id="retry-small" type="button">重来</button>
+            </div>
+          </div>
+          <div class="tank-row">
+            <div class="tank-name">水箱</div>
+            <div class="tank" id="tank">
+              <div id="tank-fill"></div>
+              <div id="tank-text">100%</div>
+            </div>
+          </div>
+        </div>
+        <div class="bottom">
+          <div class="modes">
+            <button id="mode-water" type="button" class="is-on">清水</button>
+            <button id="mode-foam" type="button">泡沫</button>
+          </div>
+          <p id="hint">按住冲洗泥点。也可先喷泡沫，再换清水冲掉。双指转动，捏合缩放。</p>
+        </div>
+      </div>
+      <div id="clear" hidden>
+        <div class="card">
+          <h2>洗干净了</h2>
+          <p>泥和泡沫都已冲掉。</p>
+          <button id="retry" type="button">再洗一次</button>
+        </div>
+      </div>
+    </div>
     <script type="module" src="./app.js"></script>
   </body>
 </html>

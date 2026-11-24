@@ -10,7 +10,7 @@
 
 ## Viewer code
 
-The HTML/JavaScript in this folder (the studio viewer, lighting, and subtle skin motion) may be reused with the project.
+The HTML/JavaScript in this folder (the portrait wash game, lighting, and subtle skin motion) may be reused with the project.
 
 ## Three.js
 
