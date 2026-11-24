@@ -19,7 +19,7 @@ const EAR_TIP_R = new THREE.Vector3(0.39, 0.812, 0.37);
 
 const TANK_MAX = 100;
 const TANK_DRAIN = 0.9;
-const SPLAT_RADIUS = 0.17;
+const SPLAT_RADIUS = 0.135;
 const CLEAN_DIRT = 0.12;
 const CLEAN_FOAM = 0.05;
 
@@ -63,6 +63,7 @@ const lifeUniforms = {
   uWashMin: { value: WASH_MIN },
   uWashSize: { value: WASH_SIZE },
   uWashTex: { value: null },
+  uJaw: { value: 0 },
 };
 
 function earAxis(base, tip) {
@@ -125,8 +126,8 @@ controls.dampingFactor = 0.08;
 controls.enablePan = false;
 controls.minDistance = 1.15;
 controls.maxDistance = 4.2;
-controls.minPolarAngle = 0.35;
-controls.maxPolarAngle = Math.PI * 0.48;
+controls.minPolarAngle = 0.18;
+controls.maxPolarAngle = Math.PI * 0.96;
 controls.target.set(0, 0.42, 0);
 controls.touches.ONE = -1;
 controls.touches.TWO = THREE.TOUCH.DOLLY_ROTATE;
@@ -139,7 +140,12 @@ controls.update();
 lastAzimuth = controls.getAzimuthalAngle();
 lastPolar = controls.getPolarAngle();
 
-const home = { pos: new THREE.Vector3(), target: new THREE.Vector3() };
+const home = {
+  pos: new THREE.Vector3(),
+  target: new THREE.Vector3(),
+  underPos: new THREE.Vector3(),
+  underTarget: new THREE.Vector3(),
+};
 
 const pmrem = new THREE.PMREMGenerator(renderer);
 scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.06).texture;
@@ -201,7 +207,9 @@ uniform vec3 uHitPos;
 uniform vec3 uHitDir;
 uniform float uHitAmp;
 uniform float uHitSig;
+uniform float uJaw;
 varying vec3 vPigLocal;
+varying vec3 vObjN;
 
 float softMask(vec3 p) {
   vec3 origin = vec3(0.0344, 0.0, 0.037);
@@ -256,12 +264,23 @@ float breathMask(vec3 p) {
   float side = 1.0 - smoothstep(0.20, 0.30, s);
   return along * height * side;
 }
+
+float jawWeight(vec3 p) {
+  vec3 origin = vec3(0.0344, 0.0, 0.037);
+  vec3 F = vec3(0.408127, 0.0, 0.912925);
+  float t = dot(p - origin, F);
+  float along = smoothstep(0.50, 0.60, t);
+  float lower = 1.0 - smoothstep(0.52, 0.60, p.y);
+  float aboveChest = smoothstep(0.44, 0.50, p.y);
+  return along * lower * aboveChest;
+}
 `;
 
 const VERTEX_MOVE = /* glsl */ `
 {
   vec3 rest = transformed;
   vPigLocal = rest;
+  vObjN = normalize(normal);
   float w = softMask(rest);
   vec3 rel = rest - uPokePos;
   float fall = exp(-dot(rel, rel) / max(2.0 * uPokeSig * uPokeSig, 1e-5));
@@ -304,6 +323,14 @@ const VERTEX_MOVE = /* glsl */ `
   transformed += (vec3(0.0, -0.013, 0.0) * upperL - nL * 0.0045) * uBlink * blinkL;
   transformed += (vec3(0.0, -0.013, 0.0) * upperR - nR * 0.0045) * uBlink * blinkR;
 
+  float jw = jawWeight(rest);
+  if (jw > 0.001 && uJaw > 0.001) {
+    vec3 hinge = vec3(0.155, 0.56, 0.52);
+    vec3 jawAxis = normalize(vec3(0.912925, 0.0, -0.408127));
+    vec3 swung = rotAxis(rest - hinge, jawAxis, 0.28 * uJaw * jw);
+    transformed += (hinge + swung) - rest;
+  }
+
   float yaw = uShift * 0.01 * smoothstep(0.02, 0.22, rest.y);
   float roll = uLean * 0.008 * smoothstep(0.02, 0.22, rest.y);
   vec3 c = vec3(0.0344, 0.0, 0.037);
@@ -320,6 +347,7 @@ const VERTEX_MOVE = /* glsl */ `
 
 const FRAGMENT_COMMON = /* glsl */ `
 varying vec3 vPigLocal;
+varying vec3 vObjN;
 uniform sampler3D uWashTex;
 uniform vec3 uWashMin;
 uniform vec3 uWashSize;
@@ -328,6 +356,27 @@ uniform vec3 uEyeL;
 uniform vec3 uEyeR;
 uniform vec3 uLidColor;
 
+float hash31(vec3 p) {
+  return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453);
+}
+float vnoise(vec3 p) {
+  vec3 i = floor(p);
+  vec3 f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float n000 = hash31(i);
+  float n100 = hash31(i + vec3(1.0, 0.0, 0.0));
+  float n010 = hash31(i + vec3(0.0, 1.0, 0.0));
+  float n110 = hash31(i + vec3(1.0, 1.0, 0.0));
+  float n001 = hash31(i + vec3(0.0, 0.0, 1.0));
+  float n101 = hash31(i + vec3(1.0, 0.0, 1.0));
+  float n011 = hash31(i + vec3(0.0, 1.0, 1.0));
+  float n111 = hash31(i + vec3(1.0, 1.0, 1.0));
+  return mix(
+    mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),
+    mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y),
+    f.z
+  );
+}
 float eyeCover(vec3 p, vec3 c) {
   float dist = length(p - c);
   float disk = 1.0 - smoothstep(0.018, 0.052, dist);
@@ -369,25 +418,43 @@ function applyPigMaterial(material) {
         vec3 lidCol = uLidColor * (0.92 + 0.08 * n1);
         diffuseColor.rgb = mix(diffuseColor.rgb, lidCol, lid * 0.96);
         diffuseColor.rgb *= 1.0 - crease * smoothstep(0.02, 0.35, uBlink) * 0.45;
-        float blot = clamp(dirt * (0.55 + 0.75 * n1) * (0.8 + 0.35 * n2), 0.0, 1.0);
-        vec3 mud = mix(vec3(0.09, 0.045, 0.025), vec3(0.24, 0.15, 0.07), n2);
-        diffuseColor.rgb = mix(diffuseColor.rgb, mud, smoothstep(0.08, 0.7, blot) * 0.88);
-        diffuseColor.rgb *= mix(1.0, 0.42, blot);
-        float foamVis = clamp(foam * (0.8 + 0.25 * n1), 0.0, 1.0);
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.97, 0.98, 0.96), foamVis * 0.96);
+        float dUp = texture(uWashTex, washUv + vec3(0.0, 0.02, 0.0)).r;
+        float drip = smoothstep(0.42, 0.78, dUp) * (1.0 - smoothstep(0.12, 0.5, dirt));
+        float thick = smoothstep(0.18, 0.42, dirt);
+        float mudMask = clamp(thick + drip * 0.9, 0.0, 1.0);
+        float fold = smoothstep(0.2, -0.65, vObjN.y);
+        float blotch = vnoise(vPigLocal * 1.8);
+        float blotchB = vnoise(vPigLocal * 4.6 + 3.7);
+        vec3 mudLight = vec3(0.34, 0.18, 0.08);
+        vec3 mudMid = vec3(0.22, 0.11, 0.045);
+        vec3 mudDark = vec3(0.07, 0.03, 0.015);
+        float bands = smoothstep(0.28, 0.55, blotch) * 0.65 + smoothstep(0.42, 0.7, blotchB) * 0.55;
+        vec3 mud = mix(mudLight, mudMid, clamp(bands, 0.0, 1.0));
+        mud = mix(mud, mudDark, clamp(smoothstep(0.62, 0.82, blotchB) + fold * 0.45, 0.0, 1.0));
+        mud *= 0.9 + 0.16 * n2;
+        diffuseColor.rgb = mix(diffuseColor.rgb, mud, mudMask * 0.97);
+        float clumps = smoothstep(0.28, 0.62, foam * (0.55 + 0.9 * n1));
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.97, 0.98, 0.96), clumps * 0.96);
       }`,
     );
     shader.fragmentShader = shader.fragmentShader.replace(
       "#include <roughnessmap_fragment>",
       /* glsl */ `#include <roughnessmap_fragment>
       {
-        vec4 washR = texture(uWashTex, (vPigLocal - uWashMin) / uWashSize);
-        roughnessFactor = mix(roughnessFactor, min(1.0, roughnessFactor + 0.42), washR.r);
-        roughnessFactor = mix(roughnessFactor, clamp(roughnessFactor * 0.7, 0.28, 1.0), washR.g);
+        vec3 wuv = (vPigLocal - uWashMin) / uWashSize;
+        vec4 washR = texture(uWashTex, wuv);
+        float dUpR = texture(uWashTex, wuv + vec3(0.0, 0.02, 0.0)).r;
+        float dripR = smoothstep(0.42, 0.78, dUpR) * (1.0 - smoothstep(0.12, 0.5, washR.r));
+        float mudMask = clamp(smoothstep(0.18, 0.42, washR.r) + dripR * 0.9, 0.0, 1.0);
+        float foamClump = smoothstep(0.28, 0.62, washR.g);
+        float wet = (1.0 - mudMask) * (1.0 - foamClump);
+        roughnessFactor = mix(roughnessFactor, 0.94, mudMask * 0.85);
+        roughnessFactor = mix(roughnessFactor, 0.16, wet * 0.82);
+        roughnessFactor = mix(roughnessFactor, 0.55, foamClump * 0.45);
       }`,
     );
   };
-  material.customProgramCacheKey = () => "pig-wash-life-impact-v4";
+  material.customProgramCacheKey = () => "pig-wash-jet-jaw-v5";
   material.needsUpdate = true;
 }
 
@@ -475,13 +542,12 @@ function rebuildDirt() {
   score.fill(0);
   washData.fill(0);
   const positions = pigMesh.geometry.attributes.position;
-  const normals = pigMesh.geometry.attributes.normal;
   for (let i = 0; i < positions.count; i++) {
     const y = positions.getY(i);
     const [ix, iy, iz] = cellOf(positions.getX(i), y, positions.getZ(i));
     const id = cellId(ix, iy, iz);
     surface[id] = 1;
-    if (y >= 0.06 && normals.getY(i) > -0.42) score[id] = 1;
+    if (y >= 0.02) score[id] = 1;
   }
   const copy = surface.slice();
   for (let iz = 0; iz < GZ; iz++) {
@@ -513,10 +579,11 @@ function rebuildDirt() {
         if (!surface[id]) continue;
         surfaceCount++;
         const y = WASH_MIN.y + ((iy + 0.5) / GY) * WASH_SIZE.y;
-        let dirt = 0.55 + 0.45 * hash3(ix, iy, iz);
-        dirt *= 0.72 + 0.5 * hash3(ix >> 2, iy >> 2, iz >> 2);
-        if (dirt < 0.52) dirt = 0.52;
-        if (y < 0.4) dirt = Math.min(1, dirt + 0.14);
+        const coarse = hash3(ix >> 3, iy >> 3, iz >> 3);
+        const mid = hash3((ix >> 1) + 11, (iy >> 1) + 5, (iz >> 1) + 3);
+        let dirt = 0.86 + 0.14 * coarse;
+        dirt *= 0.9 + 0.18 * mid;
+        if (y < 0.45) dirt = Math.min(1, dirt + 0.06);
         const value = Math.round(Math.min(1, dirt) * 255);
         washData[id * 4] = value;
         washData[id * 4 + 1] = 0;
@@ -565,7 +632,6 @@ function splat(local, mode, dt) {
   const y1 = Math.min(GY - 1, Math.ceil(cy + ry));
   const z0 = Math.max(0, Math.floor(cz - rz));
   const z1 = Math.min(GZ - 1, Math.ceil(cz + rz));
-  const r2 = SPLAT_RADIUS * SPLAT_RADIUS;
   for (let iz = z0; iz <= z1; iz++) {
     const pz = WASH_MIN.z + ((iz + 0.5) / GZ) * WASH_SIZE.z;
     for (let iy = y0; iy <= y1; iy++) {
@@ -576,8 +642,10 @@ function splat(local, mode, dt) {
         const dy = py - local.y;
         const dz = pz - local.z;
         const d2 = dx * dx + dy * dy + dz * dz;
-        if (d2 > r2) continue;
-        const fall = 1 - d2 / r2;
+        const nEdge = hash3(ix * 3 + 1, iy * 5 + 2, iz * 7 + 3);
+        const rad = SPLAT_RADIUS * (0.78 + 0.36 * nEdge);
+        if (d2 > rad * rad) continue;
+        const fall = Math.pow(1 - Math.sqrt(d2) / rad, 1.35);
         const o = cellOffset(ix, iy, iz);
         let dirt = washData[o];
         let foam = washData[o + 1];
@@ -645,15 +713,17 @@ function makePoints(count, size) {
   const life = new Float32Array(count);
   const maxLife = new Float32Array(count);
   const vel = new Float32Array(count * 3);
-  const rgb = new Float32Array(count * 3);
-  return { points, life, maxLife, vel, rgb, cursor: 0, count };
+  const grav = new Float32Array(count);
+  return { points, life, maxLife, vel, grav, cursor: 0, count };
 }
-const waterPoints = makePoints(520, 0.055);
-const foamPoints = makePoints(360, 0.095);
-waterPoints.points.material.color.set(0xd5ecf8);
-foamPoints.points.material.color.set(0xf3f1ea);
+const waterPoints = makePoints(640, 0.018);
+const foamPoints = makePoints(280, 0.032);
+waterPoints.points.material.color.set(0xf4fbff);
+foamPoints.points.material.color.set(0xf7f4ee);
+waterPoints.points.material.blending = THREE.NormalBlending;
+foamPoints.points.material.opacity = 0.82;
 
-function spawnDrop(pool, x, y, z, vx, vy, vz, life) {
+function spawnDrop(pool, x, y, z, vx, vy, vz, life, gravity) {
   const i = pool.cursor;
   pool.cursor = (pool.cursor + 1) % pool.count;
   const p = pool.points.geometry.attributes.position.array;
@@ -665,9 +735,10 @@ function spawnDrop(pool, x, y, z, vx, vy, vz, life) {
   pool.vel[i * 3 + 2] = vz;
   pool.life[i] = life;
   pool.maxLife[i] = life;
+  pool.grav[i] = gravity;
 }
 
-function stepPoints(pool, dt, gravity) {
+function stepPoints(pool, dt) {
   const p = pool.points.geometry.attributes.position.array;
   let dirty = false;
   for (let i = 0; i < pool.count; i++) {
@@ -675,33 +746,103 @@ function stepPoints(pool, dt, gravity) {
     dirty = true;
     pool.life[i] -= dt;
     if (pool.life[i] <= 0) {
-      p[i * 3 + 1] = -6;
+      p[i * 3 + 1] = -8;
       continue;
     }
-    pool.vel[i * 3 + 1] -= gravity * dt;
+    pool.vel[i * 3 + 1] -= pool.grav[i] * dt;
     p[i * 3] += pool.vel[i * 3] * dt;
     p[i * 3 + 1] += pool.vel[i * 3 + 1] * dt;
     p[i * 3 + 2] += pool.vel[i * 3 + 2] * dt;
   }
   if (dirty) pool.points.geometry.attributes.position.needsUpdate = true;
-  const fade = pool === foamPoints ? 0.9 : 0.85;
-  pool.points.material.opacity = fade;
 }
 
-const stream = new THREE.Mesh(
-  new THREE.CylinderGeometry(0.016, 0.007, 1, 12, 1, true),
+function makeJet(radiusA, radiusB, color, opacity) {
+  const mesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(radiusA, radiusB, 1, 8, 1, true),
+    new THREE.MeshBasicMaterial({
+      color,
+      transparent: true,
+      opacity,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+    }),
+  );
+  mesh.visible = false;
+  mesh.frustumCulled = false;
+  mesh.renderOrder = 4;
+  scene.add(mesh);
+  return mesh;
+}
+const jetCore = makeJet(0.0016, 0.0007, 0xffffff, 0.95);
+const jetMist = makeJet(0.006, 0.0024, 0xd7f6ff, 0.16);
+
+const streakCount = 48;
+const streaks = new THREE.InstancedMesh(
+  new THREE.PlaneGeometry(1, 1),
   new THREE.MeshBasicMaterial({
-    color: 0xd7eef8,
+    color: 0xffffff,
     transparent: true,
-    opacity: 0.55,
+    opacity: 0.72,
     depthWrite: false,
+    blending: THREE.AdditiveBlending,
     side: THREE.DoubleSide,
   }),
+  streakCount,
 );
-stream.visible = false;
-stream.frustumCulled = false;
-stream.renderOrder = 2;
-scene.add(stream);
+streaks.frustumCulled = false;
+streaks.renderOrder = 4;
+streaks.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+scene.add(streaks);
+
+const bloom = new THREE.Sprite(
+  new THREE.SpriteMaterial({
+    map: sprite,
+    color: 0xffffff,
+    transparent: true,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    opacity: 0.95,
+  }),
+);
+bloom.visible = false;
+bloom.renderOrder = 5;
+scene.add(bloom);
+
+function buildHose() {
+  const group = new THREE.Group();
+  group.name = "hose";
+  const green = new THREE.MeshStandardMaterial({ color: 0x1e7a43, roughness: 0.42, metalness: 0.04 });
+  const metal = new THREE.MeshStandardMaterial({ color: 0xd5dbe0, roughness: 0.22, metalness: 0.88 });
+  const yellow = new THREE.MeshStandardMaterial({ color: 0xe0ae2d, roughness: 0.38, metalness: 0.12 });
+  const black = new THREE.MeshStandardMaterial({ color: 0x1c1c1c, roughness: 0.62, metalness: 0.08 });
+  const handle = new THREE.Mesh(new THREE.BoxGeometry(0.055, 0.12, 0.038), green);
+  const grip = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.07, 0.016), black);
+  grip.position.set(0.01, -0.01, 0.026);
+  grip.rotation.x = 0.4;
+  const tube = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.22, 12), metal);
+  tube.rotation.z = Math.PI / 2;
+  tube.position.set(0.13, 0.05, 0);
+  const collar = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 0.02, 12), metal);
+  collar.rotation.z = Math.PI / 2;
+  collar.position.set(0.22, 0.05, 0);
+  const nozzle = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.013, 0.05, 12), yellow);
+  nozzle.rotation.z = Math.PI / 2;
+  nozzle.position.set(0.255, 0.05, 0);
+  group.add(handle, grip, tube, collar, nozzle);
+  group.traverse((obj) => {
+    if (obj.isMesh) {
+      obj.castShadow = false;
+      obj.receiveShadow = false;
+    }
+  });
+  return group;
+}
+const hose = buildHose();
+hose.frustumCulled = false;
+scene.add(hose);
+const hoseOffset = new THREE.Vector3(0.05, -0.04, -0.46);
 
 const _nozzle = new THREE.Vector3();
 const _aim = new THREE.Vector3();
@@ -711,29 +852,85 @@ const _up = new THREE.Vector3(0, 1, 0);
 const _local = new THREE.Vector3();
 const _normal = new THREE.Vector3();
 
-function placeStream(from, to, foam) {
+const _streakMat = new THREE.Matrix4();
+const _sx = new THREE.Vector3();
+const _sy = new THREE.Vector3();
+const _sz = new THREE.Vector3();
+const _sp = new THREE.Vector3();
+const _barrel = new THREE.Vector3(1, 0, 0);
+let dripClock = 0;
+const dripState = { time: 0, point: new THREE.Vector3(), normal: new THREE.Vector3(0, 1, 0) };
+
+function hideJet() {
+  jetCore.visible = false;
+  jetMist.visible = false;
+  bloom.visible = false;
+  for (let i = 0; i < streakCount; i++) {
+    _streakMat.makeScale(0, 0, 0);
+    streaks.setMatrixAt(i, _streakMat);
+  }
+  streaks.instanceMatrix.needsUpdate = true;
+}
+
+function aimHose(worldTarget) {
+  camera.updateMatrixWorld();
+  const origin = hoseOffset.clone().applyMatrix4(camera.matrixWorld);
+  hose.position.copy(origin);
+  hose.scale.setScalar(0.58);
+  const dir = worldTarget.clone().sub(origin);
+  if (dir.lengthSq() < 1e-8) return;
+  dir.normalize();
+  hose.quaternion.setFromUnitVectors(_barrel, dir);
+  hose.updateMatrixWorld(true);
+}
+
+function nozzleWorld() {
+  _nozzle.set(0.282, 0.05, 0);
+  _nozzle.applyMatrix4(hose.matrixWorld);
+  return _nozzle;
+}
+
+function placeJet(from, to, foam) {
   _dir.subVectors(to, from);
   const len = _dir.length();
-  if (len < 0.04) {
-    stream.visible = false;
+  if (len < 0.05) {
+    hideJet();
     return;
   }
   _dir.multiplyScalar(1 / len);
-  stream.visible = true;
-  stream.scale.set(foam ? 1.7 : 1, len, foam ? 1.7 : 1);
-  stream.position.copy(from).addScaledVector(_dir, len * 0.5);
-  stream.quaternion.setFromUnitVectors(_up, _dir);
-  stream.material.color.set(foam ? 0xf4f2eb : 0xd7eef8);
-  stream.material.opacity = foam ? 0.62 : 0.55;
-}
-
-function nozzleFrom(ndcX) {
-  const dist = 0.5;
-  const halfH = Math.tan(THREE.MathUtils.degToRad(camera.fov) * 0.5) * dist;
-  const halfW = halfH * camera.aspect;
-  _nozzle.set(THREE.MathUtils.clamp(ndcX, -1, 1) * halfW * 0.62, -halfH * 0.9, -dist);
-  _nozzle.applyMatrix4(camera.matrixWorld);
-  return _nozzle;
+  const mid = _mid.copy(from).addScaledVector(_dir, len * 0.5);
+  const q = new THREE.Quaternion().setFromUnitVectors(_up, _dir);
+  jetCore.visible = true;
+  jetMist.visible = true;
+  jetCore.position.copy(mid);
+  jetMist.position.copy(mid);
+  jetCore.quaternion.copy(q);
+  jetMist.quaternion.copy(q);
+  jetCore.scale.set(foam ? 1.15 : 1, len, foam ? 1.15 : 1);
+  jetMist.scale.set(foam ? 1.35 : 1, len, foam ? 1.35 : 1);
+  jetCore.material.color.set(foam ? 0xfffaf2 : 0xffffff);
+  jetMist.material.color.set(foam ? 0xf3efe6 : 0xd7f6ff);
+  const seg = len / streakCount;
+  for (let i = 0; i < streakCount; i++) {
+    const along = (i + 0.35) / streakCount;
+    _sp.copy(from).lerp(to, along);
+    _sp.x += (Math.random() - 0.5) * 0.008;
+    _sp.y += (Math.random() - 0.5) * 0.008;
+    _sp.z += (Math.random() - 0.5) * 0.008;
+    _sy.copy(_dir);
+    _sz.subVectors(camera.position, _sp);
+    if (_sz.lengthSq() < 1e-6) _sz.set(0, 0, 1);
+    _sz.normalize();
+    _sx.crossVectors(_sy, _sz).normalize();
+    _sz.crossVectors(_sx, _sy).normalize();
+    const width = (foam ? 0.006 : 0.0032) * (0.65 + along * 0.7);
+    const length = Math.max(0.03, seg * 1.6);
+    _streakMat.makeBasis(_sx, _sy, _sz);
+    _streakMat.scale(new THREE.Vector3(width, length, 1));
+    _streakMat.setPosition(_sp);
+    streaks.setMatrixAt(i, _streakMat);
+  }
+  streaks.instanceMatrix.needsUpdate = true;
 }
 
 const game = {
@@ -871,6 +1068,108 @@ function stepEar(ear, dt) {
   }
 }
 
+let audioCtx = null;
+let lastVocal = -20;
+function unlockAudio() {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  if (!audioCtx) audioCtx = new Ctx();
+  if (audioCtx.state === "suspended") audioCtx.resume();
+}
+function playPig(kind) {
+  try {
+  unlockAudio();
+  if (!audioCtx) return;
+  const squeal = kind === "squeal";
+  const t0 = audioCtx.currentTime;
+  const dur = squeal ? 0.24 : 0.36;
+  const rate = audioCtx.sampleRate;
+  const len = Math.max(1, Math.floor(rate * dur));
+  const buffer = audioCtx.createBuffer(1, len, rate);
+  const data = buffer.getChannelData(0);
+  let hold = 0;
+  for (let i = 0; i < len; i++) {
+    hold = hold * 0.84 + (Math.random() * 2 - 1) * 0.16;
+    data[i] = hold * Math.sin((Math.PI * i) / len);
+  }
+  const src = audioCtx.createBufferSource();
+  src.buffer = buffer;
+  const bp = audioCtx.createBiquadFilter();
+  bp.type = "bandpass";
+  bp.Q.value = squeal ? 6.5 : 3.2;
+  bp.frequency.setValueAtTime(squeal ? 920 : 230, t0);
+  bp.frequency.exponentialRampToValueAtTime(squeal ? 1460 : 150, t0 + dur);
+  const osc = audioCtx.createOscillator();
+  osc.type = "triangle";
+  osc.frequency.setValueAtTime(squeal ? 460 : 118, t0);
+  osc.frequency.exponentialRampToValueAtTime(squeal ? 280 : 72, t0 + dur);
+  const oscGain = audioCtx.createGain();
+  oscGain.gain.value = squeal ? 0.32 : 0.5;
+  const mix = audioCtx.createGain();
+  const out = audioCtx.createGain();
+  out.gain.setValueAtTime(0.0001, t0);
+  out.gain.exponentialRampToValueAtTime(squeal ? 0.06 : 0.1, t0 + 0.03);
+  out.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+  src.connect(bp);
+  bp.connect(mix);
+  osc.connect(oscGain);
+  oscGain.connect(mix);
+  mix.connect(out);
+  out.connect(audioCtx.destination);
+  src.start(t0);
+  osc.start(t0);
+  src.stop(t0 + dur + 0.02);
+  osc.stop(t0 + dur + 0.02);
+  } catch {
+    /* 浏览器可能拦住音频，嘴部动作仍然继续 */
+  }
+}
+const jaw = { value: 0, phase: "wait", t: 0, wait: 6.2, hold: 0.08 };
+function stepJaw(dt) {
+  jaw.t += dt;
+  if (jaw.phase === "wait") {
+    jaw.value *= Math.exp(-10 * dt);
+    if (jaw.t >= jaw.wait) {
+      jaw.phase = "open";
+      jaw.t = 0;
+      playPig(Math.random() < 0.28 ? "squeal" : "grunt");
+      lastVocal = life.time;
+    }
+  } else if (jaw.phase === "open") {
+    jaw.value = Math.min(1, jaw.t / 0.07);
+    if (jaw.value >= 1) {
+      jaw.phase = "hold";
+      jaw.t = 0;
+      jaw.hold = 0.05 + Math.random() * 0.06;
+    }
+  } else if (jaw.phase === "hold") {
+    jaw.value = 1;
+    if (jaw.t >= jaw.hold) {
+      jaw.phase = "close";
+      jaw.t = 0;
+    }
+  } else {
+    jaw.value = Math.max(0, 1 - jaw.t / 0.13);
+    if (jaw.value <= 0) {
+      jaw.value = 0;
+      jaw.phase = "wait";
+      jaw.t = 0;
+      jaw.wait = 8 + Math.random() * 11;
+    }
+  }
+  lifeUniforms.uJaw.value = jaw.value;
+}
+function reactToSpray() {
+  if (life.time - lastVocal < 6.5) return;
+  if (Math.random() > 0.6) return;
+  lastVocal = life.time;
+  playPig(Math.random() < 0.22 ? "squeal" : "grunt");
+  if (jaw.phase === "wait") {
+    jaw.phase = "open";
+    jaw.t = 0;
+  }
+}
+
 function stepLife(dt) {
   life.time += dt;
   life.phase += dt * (1.85 + 0.07 * Math.sin(life.time * 0.07));
@@ -880,6 +1179,7 @@ function stepLife(dt) {
   life.lean = 0.58 * Math.sin(life.time * 0.17 + 0.5) + 0.42 * Math.sin(life.time * 0.061);
   stepBlink(dt);
   stepGaze(dt);
+  stepJaw(dt);
   stepEar(ears.L, dt);
   stepEar(ears.R, dt);
   lifeUniforms.uBreath.value = life.breath;
@@ -986,11 +1286,13 @@ function framePig(root) {
   dist *= 0.86;
   const dir = new THREE.Vector3(0.62, 0.34, 0.71).normalize();
   camera.position.copy(controls.target).addScaledVector(dir, dist);
-  controls.minDistance = dist * 0.72;
-  controls.maxDistance = dist * 1.45;
+  controls.minDistance = dist * 0.22;
+  controls.maxDistance = dist * 1.75;
   controls.update();
   home.pos.copy(camera.position);
   home.target.copy(controls.target);
+  home.underTarget.set(controls.target.x, 0.26, controls.target.z);
+  home.underPos.set(controls.target.x + 0.2, -0.62, controls.target.z + 1.45);
   lastAzimuth = controls.getAzimuthalAngle();
   lastPolar = controls.getPolarAngle();
 }
@@ -1020,6 +1322,7 @@ function prepareModel(gltf) {
   });
   rebuildDirt();
   framePig(root);
+  lastAim.copy(controls.target);
   scene.add(root);
   pigRoot = root;
   document.body.classList.add("is-ready");
@@ -1060,40 +1363,64 @@ function aimFromNdc(x, y) {
   return { hit: null, point };
 }
 
+const lastAim = new THREE.Vector3(0, 0.4, 0);
+let sprayWas = false;
+
 function sprayFrame(dt) {
   if (!spray.active || !pigMesh || game.cleared) {
-    stream.visible = false;
+    hideJet();
     poke.target = 0;
+    sprayWas = false;
     return;
   }
   if (game.tank <= 0) {
     game.tank = 0;
-    stream.visible = false;
+    hideJet();
     impact.goal = 0;
     poke.target = 0;
+    sprayWas = false;
     return;
+  }
+  if (!sprayWas) {
+    reactToSpray();
+    sprayWas = true;
   }
   game.tank = Math.max(0, game.tank - TANK_DRAIN * dt);
   const aim = aimFromNdc(spray.ndcX, spray.ndcY);
-  const from = nozzleFrom(spray.ndcX).clone();
-  placeStream(from, aim.point, game.mode === "foam");
+  lastAim.copy(aim.point);
+  aimHose(aim.point);
+  const from = nozzleWorld().clone();
+  const foam = game.mode === "foam";
+  placeJet(from, aim.point, foam);
   _dir.subVectors(aim.point, from);
-  const dist = Math.max(0.2, _dir.length());
+  const dist = Math.max(0.15, _dir.length());
   _dir.multiplyScalar(1 / dist);
-  const speed = dist / 0.16;
-  const pool = game.mode === "foam" ? foamPoints : waterPoints;
-  const rate = game.mode === "foam" ? 240 : 380;
+  const speed = dist / 0.07;
+  const pool = foam ? foamPoints : waterPoints;
+  const rate = foam ? 220 : 460;
   sprayCarry += rate * dt;
   let spawned = 0;
-  while (sprayCarry >= 1 && spawned < 24) {
+  while (sprayCarry >= 1 && spawned < 28) {
     sprayCarry -= 1;
     spawned++;
+    const spread = foam ? 0.045 : 0.028;
     const jitter = _dir.clone();
-    jitter.x += (Math.random() - 0.5) * 0.08;
-    jitter.y += (Math.random() - 0.5) * 0.08;
-    jitter.z += (Math.random() - 0.5) * 0.08;
-    jitter.normalize().multiplyScalar(speed);
-    spawnDrop(pool, from.x, from.y, from.z, jitter.x, jitter.y, jitter.z, 0.18 + Math.random() * 0.08);
+    jitter.x += (Math.random() - 0.5) * spread;
+    jitter.y += (Math.random() - 0.5) * spread;
+    jitter.z += (Math.random() - 0.5) * spread;
+    jitter.normalize().multiplyScalar(speed * (0.85 + Math.random() * 0.3));
+    const along = Math.random() * 0.25;
+    spawnDrop(
+      pool,
+      from.x + _dir.x * dist * along,
+      from.y + _dir.y * dist * along,
+      from.z + _dir.z * dist * along,
+      jitter.x,
+      jitter.y,
+      jitter.z,
+      0.08 + Math.random() * 0.06,
+      foam ? 0.6 : 0.35,
+    );
   }
   if (aim.hit) {
     _local.copy(aim.hit.point);
@@ -1105,12 +1432,29 @@ function sprayFrame(dt) {
     impact.desired.copy(_local);
     impact.desiredDir.copy(_normal).multiplyScalar(-1);
     impact.goal = 0.0034 * regionScale(_local);
-    const splash = game.mode === "foam" ? foamPoints : waterPoints;
-    for (let i = 0; i < 3; i++) {
-      const vx = (Math.random() - 0.5) * 0.8;
-      const vy = 0.3 + Math.random() * 0.5;
-      const vz = (Math.random() - 0.5) * 0.8;
-      spawnDrop(splash, aim.point.x, aim.point.y, aim.point.z, vx, vy, vz, 0.16);
+    bloom.visible = true;
+    bloom.position.copy(aim.point).addScaledVector(_normal, 0.015);
+    bloom.scale.set(foam ? 0.2 : 0.16, foam ? 0.2 : 0.16, 1);
+    bloom.material.color.set(foam ? 0xfff6ea : 0xffffff);
+    dripState.time = 1.15;
+    dripState.point.copy(aim.point);
+    dripState.normal.copy(_normal);
+    const splash = foam ? foamPoints : waterPoints;
+    for (let i = 0; i < 8; i++) {
+      const side = new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5);
+      side.addScaledVector(_normal, 0.8).normalize();
+      const kick = 0.7 + Math.random() * 1.5;
+      spawnDrop(
+        splash,
+        aim.point.x + _normal.x * 0.01,
+        aim.point.y + _normal.y * 0.01,
+        aim.point.z + _normal.z * 0.01,
+        side.x * kick,
+        side.y * kick,
+        side.z * kick,
+        0.18 + Math.random() * 0.12,
+        2.6,
+      );
     }
     if (game.mode === "water") {
       const soft = softMaskCpu(_local);
@@ -1119,6 +1463,7 @@ function sprayFrame(dt) {
       poke.target = 0;
     }
   } else {
+    bloom.visible = false;
     impact.goal = 0;
     poke.target = 0;
   }
@@ -1136,7 +1481,7 @@ function maybeClear() {
   if (dirtAvg() <= CLEAN_DIRT && foamAvg() <= CLEAN_FOAM) {
     game.cleared = true;
     spray.active = false;
-    stream.visible = false;
+    hideJet();
     clearEl.hidden = false;
   }
 }
@@ -1154,8 +1499,8 @@ function updateHud(force) {
   tankText.textContent = game.tank <= 0 ? "空了" : `${tankPct}%`;
   if (game.cleared) hintEl.textContent = "已经洗干净了。";
   else if (game.tank <= 0) hintEl.textContent = "水箱空了。点「重来」重新装满。";
-  else if (game.mode === "foam") hintEl.textContent = "泡沫会留在身上。换清水，把泡沫和剩下的泥一起冲掉。";
-  else hintEl.textContent = "按住冲洗泥点。也可先喷泡沫，再换清水冲掉。双指转动，捏合缩放。";
+  else if (game.mode === "foam") hintEl.textContent = "泡沫会结在身上。换清水冲掉泡沫和剩下的泥。看肚皮可以冲到下面。";
+  else hintEl.textContent = "按住水枪冲洗。点「看肚皮」冲肚子和腿内侧，双指也能转到下面。";
 }
 
 function setMode(mode) {
@@ -1182,7 +1527,7 @@ function retry() {
   game.cleared = false;
   game.mode = "water";
   spray.active = false;
-  stream.visible = false;
+  hideJet();
   impact.amp = 0;
   impact.vel = 0;
   impact.goal = 0;
@@ -1192,6 +1537,12 @@ function retry() {
   clearEl.hidden = true;
   waterBtn.classList.add("is-on");
   foamBtn.classList.remove("is-on");
+  underView = false;
+  const lookBtn = document.getElementById("look-under");
+  if (lookBtn) {
+    lookBtn.classList.remove("is-on");
+    lookBtn.textContent = "看肚皮";
+  }
   camera.position.copy(home.pos);
   controls.target.copy(home.target);
   controls.update();
@@ -1212,6 +1563,7 @@ function pointerNdc(event) {
 }
 
 renderer.domElement.addEventListener("pointerdown", (event) => {
+  unlockAudio();
   pointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
   if (event.pointerType === "mouse" && event.button !== 0) return;
   if (pointers.size >= 2 || game.cleared) {
@@ -1251,21 +1603,82 @@ renderer.domElement.addEventListener("pointercancel", endPointer);
 renderer.domElement.addEventListener("contextmenu", (event) => event.preventDefault());
 renderer.domElement.addEventListener("touchmove", (event) => event.preventDefault(), { passive: false });
 
+const viewMove = {
+  active: false,
+  t: 0,
+  dur: 0.5,
+  fromP: new THREE.Vector3(),
+  toP: new THREE.Vector3(),
+  fromT: new THREE.Vector3(),
+  toT: new THREE.Vector3(),
+};
+let underView = false;
+function applyView(pos, target) {
+  camera.position.copy(pos);
+  controls.target.copy(target);
+  controls.update();
+  lastAzimuth = controls.getAzimuthalAngle();
+  lastPolar = controls.getPolarAngle();
+  camera.updateMatrixWorld();
+}
+function toggleUnder() {
+  if (!pigRoot) return;
+  underView = !underView;
+  applyView(underView ? home.underPos : home.pos, underView ? home.underTarget : home.target);
+  const lookBtn = document.getElementById("look-under");
+  if (lookBtn) {
+    lookBtn.classList.toggle("is-on", underView);
+    lookBtn.textContent = underView ? "看侧面" : "看肚皮";
+  }
+  updateHud(true);
+}
+const lookBtn = document.getElementById("look-under");
+if (lookBtn) lookBtn.addEventListener("click", toggleUnder);
+
 function animate() {
   requestAnimationFrame(animate);
   const dt = Math.min(clock.getDelta(), 1 / 30);
+  if (viewMove.active) {
+    viewMove.t += dt;
+    const u = Math.min(1, viewMove.t / viewMove.dur);
+    const k = u * u * (3 - 2 * u);
+    camera.position.lerpVectors(viewMove.fromP, viewMove.toP, k);
+    controls.target.lerpVectors(viewMove.fromT, viewMove.toT, k);
+    if (u >= 1) viewMove.active = false;
+  }
   controls.update();
+  ground.visible = camera.position.y > 0.03;
   if (pigRoot) {
     camera.updateMatrixWorld();
     pigRoot.updateMatrixWorld(true);
     if (!game.paused) stepLife(dt);
     sprayFrame(dt);
+    if (!spray.active) aimHose(lastAim.lengthSq() > 0.01 ? lastAim : controls.target);
+    if (dripState.time > 0 && !spray.active) {
+      dripState.time -= dt;
+      dripClock += dt;
+      if (dripClock > 0.11) {
+        dripClock = 0;
+        const n = dripState.normal;
+        spawnDrop(
+          waterPoints,
+          dripState.point.x + n.x * 0.02,
+          dripState.point.y + n.y * 0.02 - 0.01,
+          dripState.point.z + n.z * 0.02,
+          n.x * 0.12 + (Math.random() - 0.5) * 0.06,
+          -0.05,
+          n.z * 0.12 + (Math.random() - 0.5) * 0.06,
+          0.75,
+          3.4,
+        );
+      }
+    }
     stepImpact(dt);
     stepSoftBody(dt);
     updateHud(false);
   }
-  stepPoints(waterPoints, dt, 1.4);
-  stepPoints(foamPoints, dt, 0.35);
+  stepPoints(waterPoints, dt);
+  stepPoints(foamPoints, dt);
   renderer.render(scene, camera);
 }
 animate();
@@ -1293,6 +1706,7 @@ window.__pig = {
       lean: life.lean,
       hitAmp: impact.amp,
       spraying: spray.active,
+      camY: camera.position.y,
       surfaceCount,
     };
   },
@@ -1320,6 +1734,12 @@ window.__pig = {
     ears.R.lock = right;
     if (left !== null) lifeUniforms.uEarL.value = left;
     if (right !== null) lifeUniforms.uEarR.value = right;
+  },
+  setJaw(value) {
+    jaw.value = value;
+    jaw.phase = value > 0 ? "hold" : "wait";
+    jaw.t = 0;
+    lifeUniforms.uJaw.value = value;
   },
   setGaze(x, y) {
     gaze.x = x;
